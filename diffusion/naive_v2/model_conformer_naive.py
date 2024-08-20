@@ -158,12 +158,11 @@ class CFNEncoderLayer(nn.Module):
             GLU_type=GLU_type
         )
 
-        self.norm = nn.LayerNorm(dim_model)
-
         self.dropout = nn.Dropout(0.1)  # 废弃代码,仅做兼容性保留
 
         # selfatt -> fastatt: performer!
         if not conv_only:
+            self.norm = nn.LayerNorm(dim_model)
             self.attn = nn.TransformerEncoderLayer(
                 d_model=dim_model,
                 nhead=num_heads,

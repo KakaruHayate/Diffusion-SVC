@@ -8,6 +8,7 @@ from logger import utils
 from torch import autocast
 from torch.cuda.amp import GradScaler
 from nsf_hifigan.nvSTFT import STFT
+from diffusion.loss import GAN_loss_G, GAN_loss_D
 
 WAV_TO_MEL = None
 
@@ -124,7 +125,7 @@ def test(args, model, vocoder, loader_test, saver):
             # loss
             for i in range(args.train.batch_size):
                 if args.model.type == 'ReFlow' or args.model.type == 'ReFlow1Step':
-                    loss_dict = model(
+                    loss_dict,_ = model(
                         data['units'],
                         data['f0'],
                         data['volume'],
@@ -136,7 +137,7 @@ def test(args, model, vocoder, loader_test, saver):
                         use_vae=(args.vocoder.type == 'hifivaegan')
                     )
                 else:
-                    loss_dict = model(
+                    loss_dict,_ = model(
                         data['units'],
                         data['f0'],
                         data['volume'],
@@ -254,12 +255,19 @@ def test(args, model, vocoder, loader_test, saver):
     return test_loss_dict, test_loss
 
 
-def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loader_train, loader_test):
+def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loader_train, loader_test, Discriminator, D_optimizer, D_scheduler):
     # saver
     saver = Saver(args, initial_global_step=initial_global_step)
 
     # model size
     params_count = utils.get_network_paras_amount({'model': model})
+    if args.model.naive_with_discriminator:
+        d_params_count = utils.get_network_paras_amount({'D': Discriminator})
+        saver.log_info('--- Discriminator size ---')
+        saver.log_info(d_params_count)
+        gan_loss_g = GAN_loss_G()
+        gan_loss_d = GAN_loss_D()
+
     saver.log_info('--- model size ---')
     saver.log_info(params_count)
     if args.vocoder.type == 'hifivaegan':
@@ -276,6 +284,8 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
     num_batches = len(loader_train)
     start_epoch = initial_global_step // num_batches
     model.train()
+    if args.model.naive_with_discriminator:
+        Discriminator.train()
     saver.log_info('======= start training =======')
     scaler = GradScaler()
     if args.train.amp_dtype == 'fp32':
@@ -286,6 +296,9 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
         dtype = torch.bfloat16
     else:
         raise ValueError(' [x] Unknown amp_dtype: ' + args.train.amp_dtype)
+    d_loss = None
+    retain_graph = False
+    torch.autograd.set_detect_anomaly(True)
     for epoch in range(start_epoch, args.train.epochs):
         for batch_idx, data in enumerate(loader_train):
             saver.global_step_increment()
@@ -299,27 +312,27 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
             # forward
             if (args.model.type == 'ReFlow') or (args.model.type == 'ReFlow1Step'):
                 if dtype == torch.float32:
-                    loss_dict = model(data['units'].float(), data['f0'], data['volume'], data['spk_id'],
+                    loss_dict,naive_output = model(data['units'].float(), data['f0'], data['volume'], data['spk_id'],
                                       aug_shift=data['aug_shift'],
                                       gt_spec=data['mel'].float(), infer=False,
                                       t_start=args.model.t_start,
                                       spk_emb=data['spk_emb'], use_vae=use_vae)
                 else:
                     with autocast(device_type=args.device, dtype=dtype):
-                        loss_dict = model(data['units'], data['f0'], data['volume'], data['spk_id'],
+                        loss_dict,naive_output = model(data['units'], data['f0'], data['volume'], data['spk_id'],
                                           aug_shift=data['aug_shift'], gt_spec=data['mel'], infer=False,
                                           t_start=args.model.t_start,
                                           spk_emb=data['spk_emb'], use_vae=use_vae)
 
             else:
                 if dtype == torch.float32:
-                    loss_dict = model(data['units'].float(), data['f0'], data['volume'], data['spk_id'],
+                    loss_dict, naive_output = model(data['units'].float(), data['f0'], data['volume'], data['spk_id'],
                                       aug_shift=data['aug_shift'], gt_spec=data['mel'].float(), infer=False,
                                       k_step=args.model.k_step_max,
                                       spk_emb=data['spk_emb'], use_vae=use_vae)
                 else:
                     with autocast(device_type=args.device, dtype=dtype):
-                        loss_dict = model(data['units'], data['f0'], data['volume'], data['spk_id'],
+                        loss_dict, naive_output = model(data['units'], data['f0'], data['volume'], data['spk_id'],
                                           aug_shift=data['aug_shift'], gt_spec=data['mel'], infer=False,
                                           k_step=args.model.k_step_max,
                                           spk_emb=data['spk_emb'], use_vae=use_vae)
@@ -336,8 +349,24 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                 if loss is None:
                     loss = _loss
                 else:
-                    loss += _loss
+                    loss = _loss + loss
 
+            if args.model.naive_with_discriminator:
+                if saver.global_step >= args.model.discriminator_train_start_steps:
+                    retain_graph = True
+                    if dtype == torch.float32:
+                        d_fake, random_N = Discriminator(naive_output, None, data['mel'].float())
+                        g_loss_dict = gan_loss_g(d_fake)
+                    else:
+                        with autocast(device_type=args.device, dtype=dtype):
+                            d_fake, random_N = Discriminator(naive_output, None, data['mel'])
+                            g_loss_dict = gan_loss_g(d_fake)
+                    g_loss_float_dict = {}
+                    for k in g_loss_dict.keys():
+                        _g_loss = g_loss_dict[k]
+                        g_loss_float_dict[k] = _g_loss.item()
+                        loss = _g_loss + loss
+            
             # handle nan loss
             if torch.isnan(loss):
                 # raise ValueError(' [x] nan loss ')
@@ -349,10 +378,10 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
             else:
                 # backpropagate
                 if dtype == torch.float32:
-                    loss.backward()
+                    loss.backward(retain_graph=retain_graph)
                     optimizer.step()
                 else:
-                    scaler.scale(loss).backward()
+                    scaler.scale(loss).backward(retain_graph=retain_graph)
                     scaler.step(optimizer)
                     scaler.update()
                 
@@ -361,11 +390,45 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                 
                 scheduler.step()
 
+            if args.model.naive_with_discriminator:
+                if saver.global_step >= args.model.discriminator_train_start_steps:
+                    D_optimizer.zero_grad()
+                    if dtype == torch.float32:
+                        d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'].float())
+                        d_loss_dict = gan_loss_d(d_fake)
+                    else:
+                        with autocast(device_type=args.device, dtype=dtype):
+                            d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'])
+                            d_loss_dict = gan_loss_d(d_fake)
+                    d_loss_float_dict = {}
+                    for k in d_loss_dict.keys():
+                        _d_loss = d_loss_dict[k]
+                        d_loss_float_dict[k] = _d_loss.item()
+                        d_loss = _d_loss
+                    if torch.isnan(d_loss):
+                        # raise ValueError(' [x] nan loss ')
+                        # 如果是nan,则跳过这个batch,并清理以防止内存泄漏
+                        print(' [x] nan loss ')
+                        D_optimizer.zero_grad()
+                        del d_loss
+                        continue
+                    else:
+                        # backpropagate
+                        if dtype == torch.float32:
+                            d_loss.backward()
+                            D_optimizer.step()
+                        else:
+                            scaler.scale(d_loss).backward()
+                            scaler.step(D_optimizer)
+                            scaler.update()
+                    D_scheduler.step()
+                    
+
             # log loss
             if saver.global_step % args.train.interval_log == 0:
                 current_lr = optimizer.param_groups[0]['lr']
                 saver.log_info(
-                    'epoch: {} | {:3d}/{:3d} | {} | batch/s: {:.2f} | lr: {:.6} | loss: {:.3f} | time: {} | step: {}'.format(
+                    'epoch: {} | {:3d}/{:3d} | {} | batch/s: {:.2f} | lr: {:.6} | loss: {:.3f} | d_loss: {} | time: {} | step: {}'.format(
                         epoch,
                         batch_idx,
                         num_batches,
@@ -373,6 +436,7 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                         args.train.interval_log / saver.get_interval_time(),
                         current_lr,
                         loss.item(),
+                        '{:.3f}'.format(d_loss.item()) if d_loss is not None else 'N/A',
                         saver.get_total_time(),
                         saver.global_step
                     )
@@ -381,12 +445,27 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                 saver.log_value({
                     'train/loss': loss.item()
                 })
-
                 for k in loss_float_dict.keys():
                     saver.log_value({
                         'train/' + k: loss_float_dict[k]
                     })
-
+                if args.model.naive_with_discriminator:
+                    if saver.global_step >= args.model.discriminator_train_start_steps:
+                        current_d_lr = D_optimizer.param_groups[0]['lr']
+                        saver.log_value({
+                            'train/d_loss': d_loss.item()
+                        })
+                        for k in g_loss_float_dict.keys():
+                            saver.log_value({
+                                'train/' + k: g_loss_float_dict[k]
+                            })
+                        for k in d_loss_float_dict.keys():
+                            saver.log_value({
+                                'train/' + k: d_loss_float_dict[k]
+                            })
+                        saver.log_value({
+                            'train/d_lr': current_d_lr
+                        })
                 saver.log_value({
                     'train/lr': current_lr
                 })
@@ -400,10 +479,16 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                     saver.save_model(ema_model.module, optimizer_save, postfix=f'{saver.global_step}')
                 else:
                     saver.save_model(model, optimizer_save, postfix=f'{saver.global_step}')
+                if args.model.naive_with_discriminator:
+                    D_optimizer_save = D_optimizer if args.train.save_opt else None
+                    saver.save_model(Discriminator, D_optimizer_save, name='D', postfix=f'{saver.global_step}')
+                
                 
                 last_val_step = saver.global_step - args.train.interval_val
                 if last_val_step % args.train.interval_force_save != 0:
                     saver.delete_model(postfix=f'{last_val_step}')
+                    if args.model.naive_with_discriminator:
+                        saver.delete_model(name='D',postfix=f'{last_val_step}')
 
                 # run testing set
                 if args.train.use_ema:

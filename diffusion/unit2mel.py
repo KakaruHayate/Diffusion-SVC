@@ -536,9 +536,10 @@ class Unit2MelV2(nn.Module):
 
         # combo trained model
         if self.combo_trained_model:
-            x, gt_spec, naive_loss = self.naive_fn_forward_for_combo_trained_model(x, gt_spec, infer, use_vae)
+            x, gt_spec, naive_loss, naive_output = self.naive_fn_forward_for_combo_trained_model(x, gt_spec, infer, use_vae)
         else:
             naive_loss = 0
+            naive_output = None
 
         # diffusion
         x = self.decoder(x, gt_spec=gt_spec, infer=infer, infer_speedup=infer_speedup, method=method, k_step=k_step,
@@ -550,12 +551,12 @@ class Unit2MelV2(nn.Module):
         if infer:
             if (self.z_rate is not None) and (self.z_rate != 0):
                 x = x / self.z_rate  # scale z
-
+        
         if not infer:
             if self.combo_trained_model:
-                return {'diff_loss': x, 'naive_loss': naive_loss}
+                return {'diff_loss': x, 'naive_loss': naive_loss}, naive_output
             else:
-                return {'diff_loss': (x + naive_loss)}
+                return {'diff_loss': (x + naive_loss)}, naive_output
 
         return x
 
@@ -571,7 +572,8 @@ class Unit2MelV2(nn.Module):
 
     def naive_fn_forward_for_combo_trained_model(self, x, gt_spec, infer, use_vae):
         # forward naive_fn, get _x from input x
-        _x = self.naive_stack(x, use_vae=use_vae)
+        naive_output = self.naive_stack(x, use_vae=use_vae)
+        _x = naive_output
         if infer:
             gt_spec = _x
             naive_loss = 0
@@ -584,7 +586,7 @@ class Unit2MelV2(nn.Module):
         # if naive_out_mel_cond_diff is True, then use _x as cond for diffusion, else use x
         if self.naive_out_mel_cond_diff:
             x = _x
-        return x, gt_spec, naive_loss
+        return x, gt_spec, naive_loss, naive_output
 
     def emb_spk(self, x, spk_id, units_len, units_device, spk_mix_dict, spk_emb_dict , spk_emb):
         if self.use_speaker_encoder:
@@ -688,7 +690,7 @@ class Unit2MelV2ReFlow(Unit2MelV2):
 
         # combo trained model
         if self.combo_trained_model:
-            x, gt_spec, naive_loss = self.naive_fn_forward_for_combo_trained_model(x, gt_spec, infer, use_vae)
+            x, gt_spec, naive_loss, naive_output = self.naive_fn_forward_for_combo_trained_model(x, gt_spec, infer, use_vae)
         else:
             naive_loss = 0
 
@@ -708,9 +710,9 @@ class Unit2MelV2ReFlow(Unit2MelV2):
 
         if not infer:
             if self.combo_trained_model:
-                return {'reflow_loss': x, 'naive_loss': naive_loss}
+                return {'reflow_loss': x, 'naive_loss': naive_loss}, naive_output
             else:
-                return {'reflow_loss': (x + naive_loss)}
+                return {'reflow_loss': (x + naive_loss)}, naive_output
 
         return x
 
