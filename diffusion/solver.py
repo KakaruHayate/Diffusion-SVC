@@ -387,8 +387,9 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                 
                 if args.train.use_ema:
                     ema_model.update_parameters(model)
-                
-                scheduler.step()
+
+                if args.model.naive_with_discriminator==False or saver.global_step < args.model.discriminator_train_start_steps:
+                    scheduler.step()
 
             if args.model.naive_with_discriminator:
                 if saver.global_step >= args.model.discriminator_train_start_steps:
@@ -421,6 +422,7 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                             scaler.scale(d_loss).backward()
                             scaler.step(D_optimizer)
                             scaler.update()
+                    scheduler.step()
                     D_scheduler.step()
                     
 
