@@ -398,7 +398,7 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                         d_loss_dict = gan_loss_d(d_fake)
                     else:
                         with autocast(device_type=args.device, dtype=dtype):
-                            d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'])
+                            d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'], random_N)
                             d_loss_dict = gan_loss_d(d_fake)
                     d_loss_float_dict = {}
                     for k in d_loss_dict.keys():
