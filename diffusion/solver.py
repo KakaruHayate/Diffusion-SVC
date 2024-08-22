@@ -394,7 +394,7 @@ def train(args, initial_global_step, model, optimizer, scheduler, vocoder, loade
                 if saver.global_step >= args.model.discriminator_train_start_steps:
                     D_optimizer.zero_grad()
                     if dtype == torch.float32:
-                        d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'].float())
+                        d_fake, _ = Discriminator(naive_output.detach(), None, data['mel'].float(), random_N)
                         d_loss_dict = gan_loss_d(d_fake)
                     else:
                         with autocast(device_type=args.device, dtype=dtype):
