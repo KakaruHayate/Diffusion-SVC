@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from diffusion.wtconv import WTConv1d
 
 
 
@@ -201,6 +202,8 @@ class ConformerConvModule(nn.Module):
             conv_model_type='mode1',
             activation='SiLU',
             GLU_type='GLU',
+            use_wtconv=True, 
+            wt_levels=3,
     ):
         super().__init__()
 
@@ -231,18 +234,25 @@ class ConformerConvModule(nn.Module):
             _dropout = nn.Dropout(dropout)
         else:
             _dropout = nn.Identity()
+        if use_wtconv:
+            _dwconv = WTConv1d(inner_dim, inner_dim, kernel_size=kernel_size, wt_levels=wt_levels)
+        else:
+            _dwconv = nn.Conv1d(inner_dim, inner_dim, kernel_size=kernel_size, padding=padding[0], groups=inner_dim)
         if conv_model_type == 'mode1':
             self.net = nn.Sequential(
                 _norm,
                 Transpose((1, 2)),
                 nn.Conv1d(dim, inner_dim * 2, 1),
                 _GLU,
-                nn.Conv1d(inner_dim, inner_dim, kernel_size=kernel_size, padding=padding[0], groups=inner_dim),
+                _dwconv,
                 _activation,
                 nn.Conv1d(inner_dim, dim, 1),
                 Transpose((1, 2)),
                 _dropout
             )
+        else:
+            raise ValueError(f'{conv_model_type} is not a valid conv_model_type')
+        """
         elif conv_model_type == 'mode2':
             assert expansion_factor == 1, 'expansion_factor must be 1 for mode2'
             self.net = nn.Sequential(
@@ -287,9 +297,10 @@ class ConformerConvModule(nn.Module):
                 activation=_activation,
                 padding=padding[0]
             )
+        
         else:
             raise ValueError(f'{conv_model_type} is not a valid conv_model_type')
-
+        """
     def forward(self, x):
         return self.net(x)
 
