@@ -8,6 +8,25 @@ import torch.nn.functional as F
 # License: MIT
 
 
+class ElementScale(nn.Module):
+    """A learnable element-wise scaler."""
+
+    def __init__(self, embed_dims, init_value=0., requires_grad=True):
+        super(ElementScale, self).__init__()
+        self.scale = nn.Parameter(
+            init_value * torch.ones((1, embed_dims, 1)),
+            requires_grad=requires_grad
+        )
+        self.decompose = nn.Conv1d(
+            in_channels=embed_dims,  # C -> 1
+            out_channels=1, kernel_size=1,
+        )
+
+    def forward(self, x):
+        x = x + self.scale * (x - F.gelu(self.decompose(x))
+        return x
+
+
 class SwiGLU(nn.Module):
     ## Swish-Applies the gated linear unit function.
     def __init__(self, dim=-1):
