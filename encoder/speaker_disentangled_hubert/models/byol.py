@@ -26,7 +26,7 @@ from torch import nn
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.hubert.modeling_hubert import HubertEncoderLayer, HubertModel
 
-from ..mincut.mincut_utils import min_cut
+# from ..mincut.mincut_utils import min_cut
 from .modules import MLP, init_module
 
 
@@ -268,34 +268,34 @@ class BYOLForSyllableDiscovery(nn.Module):
             8,
         )
 
-    @torch.inference_mode()
-    def get_hidden_states(self, input_values: torch.Tensor) -> np.ndarray:
-        hidden_states, _ = self.model.student_forward(input_values)
-        return hidden_states[self.segmentation_layer].squeeze(0).cpu().numpy()
-
-    def forward(self, input_values: torch.Tensor) -> Dict[str, np.ndarray]:
-        hidden_states = self.get_hidden_states(input_values)
-        if self.quantizer1 is None or self.quantizer2 is None:
-            return {"hidden_states": hidden_states}
-
-        frame_similarity = hidden_states @ hidden_states.T
-        boundary, segment_features, frame_boundary = min_cut(hidden_states)
-
-        # deduplicated syllabic units
-        units = self.quantizer1.predict(segment_features)
-        units = self.quantizer2[units]
-
-        # duplicated syllabic units
-        repeats = frame_boundary[:, 1] - frame_boundary[:, 0]
-        duplicated_units = np.repeat(units, repeats)
-        return {
-            "units": units,
-            "duplicated_units": duplicated_units,
-            "boundary": boundary,
-            "frame_boundary": frame_boundary,
-            "hidden_states": hidden_states,
-            "frame_similarity": frame_similarity,
-        }
+    #@torch.inference_mode()
+    #def get_hidden_states(self, input_values: torch.Tensor) -> np.ndarray:
+    #    hidden_states, _ = self.model.student_forward(input_values)
+    #    return hidden_states[self.segmentation_layer].squeeze(0).cpu().numpy()
+    #
+    #def forward(self, input_values: torch.Tensor) -> Dict[str, np.ndarray]:
+    #    hidden_states = self.get_hidden_states(input_values)
+    #    if self.quantizer1 is None or self.quantizer2 is None:
+    #        return {"hidden_states": hidden_states}
+    #
+    #    frame_similarity = hidden_states @ hidden_states.T
+    #    boundary, segment_features, frame_boundary = min_cut(hidden_states)
+    #
+    #    # deduplicated syllabic units
+    #    units = self.quantizer1.predict(segment_features)
+    #    units = self.quantizer2[units]
+    #
+    #    # duplicated syllabic units
+    #    repeats = frame_boundary[:, 1] - frame_boundary[:, 0]
+    #    duplicated_units = np.repeat(units, repeats)
+    #    return {
+    #        "units": units,
+    #        "duplicated_units": duplicated_units,
+    #        "boundary": boundary,
+    #        "frame_boundary": frame_boundary,
+    #        "hidden_states": hidden_states,
+    #        "frame_similarity": frame_similarity,
+    #    }
 
 
 class BYOLForSequenceClassification(nn.Module):
