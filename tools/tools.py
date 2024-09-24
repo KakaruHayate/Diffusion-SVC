@@ -12,6 +12,7 @@ from transformers import HubertModel, Wav2Vec2FeatureExtractor, Wav2Vec2ForCTC
 from fairseq import checkpoint_utils
 from encoder.hubert.model import HubertSoft
 from encoder.speaker_encoder.model import SpeakerEncoder as TTSSpeakerEncoder
+from encoder.speaker_disentangled_hubert.models.byol import BYOL
 import scipy.signal
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from torchaudio.transforms import Resample
@@ -459,6 +460,9 @@ class Units_Encoder:
         if encoder in ('wav2vec2', 'wav2vec2-xlsr-53-espeak-cv-ft'):
             self.model = Wav2Vec2(encoder_ckpt, device=device)
             is_loaded_encoder = True
+        if encoder == 'SDhubert':
+            self.model = SDhubert(encoder_ckpt, device=device)
+            is_loaded_encoder = True
         if not is_loaded_encoder:
             raise ValueError(f" [x] Unknown units encoder: {encoder}")
         print(f"Units Forced Mode:{self.units_forced_mode}")
@@ -836,6 +840,24 @@ class Wav2Vec2:
         with torch.no_grad():
             logits = self.model(audio).logits
         return logits
+
+
+class SDhubert():
+    def __init__(self, path, h_sample_rate=16000, h_hop_size=320, device='cpu'):
+        self.device = device
+        print(' [Encoder Model] Speaker Disentangled Hubert ')
+        print(' [Loading] ' + path)
+        state_dict = torch.load(checkpoint_path)
+        self.segmentation_layer = 8
+        head_out_size, head_hidden_size = state_dict["student_projector.mlp.3.weight"].shape
+        self.model = BYOL(head_out_size=head_out_size, head_hidden_size=head_hidden_size)
+        self.model.load_state_dict(state_dict)
+        self.model.to(self.device)
+        self.model.eval()
+    def __call__(self, audio, padding_mask=None):  # B, T
+        with torch.no_grad():
+            hidden_states, _ = self.model.student_forward(input_values)
+        return hidden_states[self.segmentation_layer]
 
 
 class DotDict(dict):
