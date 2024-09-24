@@ -27,7 +27,41 @@ from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.hubert.modeling_hubert import HubertEncoderLayer, HubertModel
 
 # from ..mincut.mincut_utils import min_cut
-from .modules import MLP, init_module
+# from .modules import MLP, init_module
+
+
+def init_module(m: nn.Module):
+    if isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.ones_(m.weight)
+        nn.init.zeros_(m.bias)
+
+
+class MLP(nn.Module):
+    def __init__(
+        self,
+        in_dim: int = 768,
+        out_dim: int = 256,
+        hidden_dim: int = 2048,
+        norm_outputs: bool = False,
+    ):
+        super().__init__()
+        self.norm_outputs = norm_outputs
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, out_dim, bias=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.mlp(x)
+        if self.norm_outputs:
+            x = nn.functional.normalize(x, dim=-1, p=2)
+        return x
 
 
 class BYOL(nn.Module):
@@ -43,7 +77,7 @@ class BYOL(nn.Module):
         self.ema_decay = ema_decay
         self.init_last_layer = init_last_layer
 
-        self.student = HubertModel.from_pretrained(model_name_or_path)
+        self.student = HubertModel.from_pretrained(model_name_or_path, local_files_only=True)
         self.student_projector = MLP(
             self.student.config.hidden_size,
             head_out_size,

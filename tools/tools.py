@@ -847,16 +847,16 @@ class SDhubert():
         self.device = device
         print(' [Encoder Model] Speaker Disentangled Hubert ')
         print(' [Loading] ' + path)
-        state_dict = torch.load(checkpoint_path)
+        state_dict = torch.load(path)["model"]
         self.segmentation_layer = 8
         head_out_size, head_hidden_size = state_dict["student_projector.mlp.3.weight"].shape
-        self.model = BYOL(head_out_size=head_out_size, head_hidden_size=head_hidden_size)
+        self.model = BYOL(model_name_or_path="./pretrain/hubert-base-ls960", head_out_size=head_out_size, head_hidden_size=head_hidden_size)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
     def __call__(self, audio, padding_mask=None):  # B, T
         with torch.no_grad():
-            hidden_states, _ = self.model.student_forward(input_values)
+            hidden_states, _ = self.model.student_forward(audio)
         return hidden_states[self.segmentation_layer]
 
 
