@@ -164,7 +164,7 @@ if __name__ == '__main__':
         os.environ['MASTER_PORT'] = args.ddp.port
         # run
         torch.multiprocessing.set_start_method('spawn')
-        torch.multiprocessing.spawn(train_run, args=(cmd.config, cmd.print, True, device_list), nprocs=len(device_ids))
+        torch.multiprocessing.spawn(train_run, args=(cmd.config, cmd.print, cmd.pretrain, True, device_list), nprocs=len(device_ids))
 
     else:
         train_run(0, cmd.config, cmd.print, cmd.pretrain, ddp=False)
